@@ -1,0 +1,171 @@
+# =============================================================================
+# Caetutti Dynamics - Docker Compose para Home Server + Cloudflare Tunnel
+# Servidor local (Ubuntu) + Cloudflare Tunnel (HTTPS/DNS grátis)
+# =============================================================================
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # Backend: Express + Playwright + SQLite + Sync Worker
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: caetutti-backend
+    restart: unless-stopped
+    user: "1000:1000"  # teu UID:GID (rode `id` no terminal)
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - DATABASE_FILE=/data/caetutti.db
+      # Playwright config
+      - PLAYWRIGHT_BROWSERS_PATH=0
+      - PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+      - HEADLESS=true
+    volumes:
+      - caetutti-data:/data
+      # Hot-reload opcional (descomenta se quiser editar código no servidor)
+      # - ./backend/src:/app/backend/dist/src:ro
+    networks:
+      - caetutti-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # ---------------------------------------------------------------------------
+  # Frontend: Next.js standalone server
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: caetutti-frontend
+    restart: unless-stopped
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - NEXT_TELEMETRY_DISABLED=1
+    command: ["node", "frontend/server.js"]
+    networks:
+      - caetutti-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Nginx: Reverse proxy local (porta 80) - Cloudflare Tunnel aponta pra aqui
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: caetutti-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"  # Cloudflare Tunnel conecta aqui (localhost:80)
+    volumes:
+      - ./nginx.home.conf:/etc/nginx/nginx.conf:ro
+      - caetutti-frontend-static:/app/frontend/.next/static:ro
+    networks:
+      - caetutti-net
+    depends_on:
+      - frontend
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Cloudflared Tunnel: Conecta teu localhost:80 ao Cloudflare (HTTPS + DNS)
+  # ---------------------------------------------------------------------------
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: caetutti-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    env_file: .cloudflare.env  # arquivo com TUNNEL_TOKEN=...
+    networks:
+      - caetutti-net
+    depends_on:
+      - nginx
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 32M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ---------------------------------------------------------------------------
+  # Watchtower: Auto-update containers quando faz git push (opcional)
+  # ---------------------------------------------------------------------------
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: caetutti-watchtower
+    restart: unless-stopped
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300  # checa a cada 5 min
+      - WATCHTOWER_LABEL_ENABLE=true  # só atualiza containers com label
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - caetutti-net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+networks:
+  caetutti-net:
+    driver: bridge
+    name: caetutti-network
+
+volumes:
+  caetutti-data:
+    driver: local
+    name: caetutti-data
+  caetutti-frontend-static:
+    driver: local
+    name: caetutti-frontend-static

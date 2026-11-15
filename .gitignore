@@ -18,6 +18,7 @@ build/
 .env.local
 .env.production
 .env.*.local
+.cloudflare.env
 
 # Database
 *.db
@@ -79,16 +80,15 @@ test-results/
 # TypeScript cache
 .tscache/
 
-# Vercel/Netlify (no usar para este proyecto)
+# Vercel/Netlify (não usar para este projeto)
 .vercel
 .netlify
 
 # PM2
 .pm2/
-ecosystem.config.js (si tiene secrets)
 
-# Misceláneos
-*.pem
-*.key
-*.crt
-*.p12
+# Home server dirs
+caetutti-data/
+caetutti-logs/
+caetutti-backups/
+backup-caetutti.sh
